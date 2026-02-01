@@ -136,6 +136,38 @@ export function UpperAdminPanel({ onClose, currentUserId, isSuperAdmin }: UpperA
     }
 
     try {
+      const { data: existingBan } = await supabase
+        .from('banned_users')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (!existingBan) {
+        const { error: banError } = await supabase
+          .from('banned_users')
+          .insert({
+            user_id: userId,
+            banned_by: currentUserId,
+            banned_at: new Date().toISOString(),
+            reason: 'Account deleted by admin',
+            is_active: true
+          });
+
+        if (banError) throw banError;
+      } else {
+        const { error: updateBanError } = await supabase
+          .from('banned_users')
+          .update({
+            is_active: true,
+            banned_by: currentUserId,
+            banned_at: new Date().toISOString(),
+            reason: 'Account deleted by admin'
+          })
+          .eq('user_id', userId);
+
+        if (updateBanError) throw updateBanError;
+      }
+
       const { error: petsError } = await supabase
         .from('pets')
         .delete()
@@ -152,9 +184,10 @@ export function UpperAdminPanel({ onClose, currentUserId, isSuperAdmin }: UpperA
 
       setShowConfirmDelete(null);
       loadUsers();
+      alert('User deleted and banned successfully');
     } catch (error) {
       console.error('Error deleting user:', error);
-      alert('Failed to delete user');
+      alert('Failed to delete user: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 

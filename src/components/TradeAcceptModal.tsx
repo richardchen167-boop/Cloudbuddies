@@ -270,8 +270,10 @@ export function TradeAcceptModal({ trade, currentUserId, onClose, onComplete }: 
 
       if (error) throw error;
 
-      onComplete();
-      onClose();
+      setTimeout(() => {
+        onComplete();
+        onClose();
+      }, 100);
     } catch (error) {
       console.error('Error declining trade:', error);
       alert('Failed to decline trade');

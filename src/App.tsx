@@ -362,9 +362,15 @@ function App() {
 
       setPendingTrades(allTrades);
 
-      if (receivedTrades && receivedTrades.length > 0 && !selectedTrade) {
-        setIncomingTrade(receivedTrades[0]);
-        setShowIncomingNotification(true);
+      if (receivedTrades && receivedTrades.length > 0) {
+        const newTrade = receivedTrades[0];
+        if (!incomingTrade || incomingTrade.id !== newTrade.id) {
+          setIncomingTrade(newTrade);
+          setShowIncomingNotification(true);
+        }
+      } else {
+        setIncomingTrade(null);
+        setShowIncomingNotification(false);
       }
     } catch (error) {
       console.error('Error loading pending trades:', error);
