@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Users, Clock, ArrowRightLeft, Ban } from 'lucide-react';
+import { Users, Clock, ArrowRightLeft, Ban, Search, UserPlus, Check, X } from 'lucide-react';
 import { getUserSessionTime, formatTimeSpent } from '../hooks/useTimeTracking';
 import { ProfileModal } from './ProfileModal';
 import { AnimatedSleigh } from './AnimatedSleigh';
@@ -36,6 +36,12 @@ interface Snowflake {
   delay: number;
 }
 
+type FriendStatus = 'none' | 'pending_sent' | 'pending_received' | 'friends';
+
+interface FriendStatuses {
+  [userId: string]: FriendStatus;
+}
+
 export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isDecember, onTradeInitiate }: GlobalPetsSidebarProps) {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [bannedUsers, setBannedUsers] = useState<BannedUser[]>([]);
@@ -46,12 +52,21 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
   const [selectedProfile, setSelectedProfile] = useState<{ userId: string; ownerName: string } | null>(null);
   const [snowflakes, setSnowflakes] = useState<Snowflake[]>([]);
   const [unbanNotice, setUnbanNotice] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [friendStatuses, setFriendStatuses] = useState<FriendStatuses>({});
+  const [friendActionLoading, setFriendActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
     loadAllUsers();
     const interval = setInterval(loadAllUsers, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (currentUserId) {
+      loadFriendStatuses();
+    }
+  }, [currentUserId, users]);
 
   useEffect(() => {
     if (isDecember) {
@@ -130,6 +145,66 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
     }
   };
 
+  const loadFriendStatuses = async () => {
+    if (!currentUserId) return;
+    try {
+      const { data: friendRows } = await supabase
+        .from('friends')
+        .select('*')
+        .or(`requester_id.eq.${currentUserId},addressee_id.eq.${currentUserId}`);
+
+      const statuses: FriendStatuses = {};
+      for (const row of friendRows || []) {
+        const otherId = row.requester_id === currentUserId ? row.addressee_id : row.requester_id;
+        if (row.status === 'accepted') {
+          statuses[otherId] = 'friends';
+        } else if (row.status === 'pending') {
+          statuses[otherId] = row.requester_id === currentUserId ? 'pending_sent' : 'pending_received';
+        }
+      }
+      setFriendStatuses(statuses);
+    } catch (error) {
+      console.error('Error loading friend statuses:', error);
+    }
+  };
+
+  const handleAddFriend = async (targetUserId: string) => {
+    if (!currentUserId || friendActionLoading) return;
+    setFriendActionLoading(targetUserId);
+    try {
+      const status = friendStatuses[targetUserId];
+
+      if (status === 'pending_sent') {
+        await supabase
+          .from('friends')
+          .delete()
+          .eq('requester_id', currentUserId)
+          .eq('addressee_id', targetUserId);
+      } else if (status === 'pending_received') {
+        await supabase
+          .from('friends')
+          .update({ status: 'accepted', updated_at: new Date().toISOString() })
+          .eq('requester_id', targetUserId)
+          .eq('addressee_id', currentUserId);
+      } else if (status === 'friends') {
+        await supabase
+          .from('friends')
+          .delete()
+          .or(`and(requester_id.eq.${currentUserId},addressee_id.eq.${targetUserId}),and(requester_id.eq.${targetUserId},addressee_id.eq.${currentUserId})`);
+      } else {
+        await supabase
+          .from('friends')
+          .insert({ requester_id: currentUserId, addressee_id: targetUserId, status: 'pending' });
+      }
+
+      await loadFriendStatuses();
+    } catch (error) {
+      console.error('Error managing friend:', error);
+    } finally {
+      setFriendActionLoading(null);
+    }
+  };
+
   const handleBanUser = async (userId: string) => {
     if (!currentUserId) return;
 
@@ -168,6 +243,36 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
       console.error('Error unbanning user:', error);
     }
   };
+
+  const getFriendButtonLabel = (status: FriendStatus | undefined) => {
+    switch (status) {
+      case 'friends': return 'Friends';
+      case 'pending_sent': return 'Requested';
+      case 'pending_received': return 'Accept';
+      default: return 'Add Friend';
+    }
+  };
+
+  const getFriendButtonStyle = (status: FriendStatus | undefined) => {
+    switch (status) {
+      case 'friends':
+        return 'bg-gradient-to-r from-green-500 to-emerald-500 hover:from-red-500 hover:to-rose-500 text-white';
+      case 'pending_sent':
+        return 'bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 border-2 border-gray-200 hover:border-red-200';
+      case 'pending_received':
+        return 'bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white animate-pulse';
+      default:
+        return 'bg-white hover:bg-blue-50 text-blue-600 border-2 border-blue-200 hover:border-blue-400';
+    }
+  };
+
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const filteredUsers = trimmedQuery.length > 0
+    ? users.filter(u =>
+        (u.username || '').toLowerCase().includes(trimmedQuery) ||
+        (u.displayName || '').toLowerCase().includes(trimmedQuery)
+      )
+    : [];
 
   return (
     <>
@@ -341,7 +446,7 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
               }
             `}</style>
           </div>
-          <div className="fixed top-0 right-0 h-full w-80 bg-white shadow-2xl z-50 overflow-y-auto">
+          <div className="fixed top-0 right-0 h-full w-80 bg-white shadow-2xl z-50 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             {unbanNotice && (
               <div className="bg-green-100 border-l-4 border-green-500 text-green-700 p-3 m-3 rounded">
                 <p className="text-sm font-semibold">{unbanNotice}</p>
@@ -360,8 +465,31 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
               </button>
             </div>
 
+            {!showBanned && (
+              <div className="sticky top-[60px] bg-white border-b border-gray-100 px-4 py-3 z-10">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by username..."
+                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-xl text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-blue-400 transition-colors"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {isUpperAdmin && bannedUsers.length > 0 && (
-              <div className="sticky top-12 bg-gradient-to-r from-red-50 to-rose-50 border-b-2 border-red-200 p-3">
+              <div className="bg-gradient-to-r from-red-50 to-rose-50 border-b-2 border-red-200 p-3">
                 <button
                   onClick={() => setShowBanned(!showBanned)}
                   className="text-sm font-semibold text-red-600 hover:text-red-700"
@@ -382,7 +510,7 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
                   bannedUsers.map((user) => (
                     <div
                       key={user.userId}
-                      className="bg-gradient-to-br from-red-50 to-rose-50 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow"
+                      className="bg-gradient-to-br from-red-50 to-rose-50 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
                     >
                       <div className="flex items-start gap-3">
                         <div className="text-4xl">🚫</div>
@@ -408,16 +536,25 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
                     </div>
                   ))
                 )
-              ) : users.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  <div className="text-4xl mb-2">👥</div>
-                  <p>No users found</p>
+              ) : trimmedQuery.length === 0 ? (
+                <div className="text-center py-12 px-4">
+                  <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Search size={28} className="text-blue-400" />
+                  </div>
+                  <p className="text-gray-700 font-semibold mb-1">Search for a user</p>
+                  <p className="text-sm text-gray-400">Type a username above to find and connect with other players.</p>
+                </div>
+              ) : filteredUsers.length === 0 ? (
+                <div className="text-center py-10">
+                  <div className="text-4xl mb-2">🔍</div>
+                  <p className="text-gray-500 font-medium">No users found</p>
+                  <p className="text-sm text-gray-400 mt-1">Try a different username</p>
                 </div>
               ) : (
-                users.map((user) => (
+                filteredUsers.map((user) => (
                   <div
                     key={user.userId}
-                    className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow"
+                    className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow"
                   >
                     <div className="flex items-start gap-3">
                       <div className="text-4xl">👤</div>
@@ -441,15 +578,38 @@ export function GlobalPetsSidebar({ currentUserId, isUpperAdmin, isNovember, isD
                             <span>Trading enabled</span>
                           </div>
                         )}
+                        {friendStatuses[user.userId] === 'friends' && (
+                          <div className="flex items-center gap-1 text-xs text-emerald-600 mt-1">
+                            <Check size={12} />
+                            <span>Friends</span>
+                          </div>
+                        )}
+                        {friendStatuses[user.userId] === 'pending_received' && (
+                          <div className="flex items-center gap-1 text-xs text-blue-600 mt-1 font-semibold">
+                            <UserPlus size={12} />
+                            <span>Wants to be friends</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => setSelectedProfile({ userId: user.userId, ownerName: user.displayName || user.username })}
-                        className="flex-1 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
+                        className="flex-1 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3 py-2 rounded-lg font-semibold text-sm transition-colors"
                       >
                         View Profile
                       </button>
+                      {currentUserId && user.userId !== currentUserId && (
+                        <button
+                          onClick={() => handleAddFriend(user.userId)}
+                          disabled={friendActionLoading === user.userId}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-lg font-semibold text-sm transition-all ${getFriendButtonStyle(friendStatuses[user.userId])} ${friendActionLoading === user.userId ? 'opacity-60 cursor-not-allowed' : ''}`}
+                          title={getFriendButtonLabel(friendStatuses[user.userId])}
+                        >
+                          <UserPlus size={14} />
+                          <span className="hidden sm:inline">{getFriendButtonLabel(friendStatuses[user.userId])}</span>
+                        </button>
+                      )}
                       {isUpperAdmin && user.userId !== currentUserId && (
                         <button
                           onClick={() => handleBanUser(user.userId)}
